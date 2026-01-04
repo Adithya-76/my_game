@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arcade AI | Adaptive Game Engine</title>
+    <style>
+        /* --- VISUAL CORE --- */
+        :root {
+            --bg-deep: #0f172a;
+            --bg-surface: #1e293b;
+            --primary: #6366f1; /* Indigo */
+            --accent: #06b6d4;  /* Cyan */
+            --danger: #ef4444;
+            --success: #22c55e;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* --- HEADER & PROMPT --- */
+        header {
+            text-align: center;
+            margin-top: 40px;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin: 0;
+            background: linear-gradient(to right, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-size: 3rem;
+        }
+
+        .prompt-wrapper {
+            background: var(--bg-surface);
+            padding: 8px 10px;
+            border-radius: 50px;
+            display: flex;
+            align-items: center;
+            width: 90%;
+            max-width: 600px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+            border: 1px solid #334155;
+            transition: border-color 0.3s;
+        }
+
+        .prompt-wrapper:focus-within {
+            border-color: var(--primary);
+        }
+
+        input[type="text"] {
+            background: transparent;
+            border: none;
+            color: white;
+            flex-grow: 1;
+            padding: 12px 20px;
+            font-size: 1.1rem;
+            outline: none;
+        }
+
+        button#gen-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 40px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button#gen-btn:hover {
+            background: var(--accent);
+            transform: translateY(-1px);
+        }
+
+        /* --- GAME STAGE --- */
+        #game-stage {
+            position: relative;
+            margin-top: 20px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.5);
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+            min-width: 300px;
+        }
+
+        canvas {
+            display: block;
+            outline: none;
+        }
+
+        .overlay-text {
+            position: absolute;
+            color: white;
+            text-align: center;
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+
+        /* --- SUDOKU SPECIFIC --- */
+        #sudoku-container {
+            padding: 20px;
+            background: var(--bg-surface);
+        }
+        
+        .sudoku-grid {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            gap: 1px;
+            background: #475569;
+            border: 2px solid #475569;
+        }
+
+        .sudoku-cell {
+            width: 40px;
+            height: 40px;
+            text-align: center;
+            border: none;
+            font-size: 1.2rem;
+            background: var(--bg-deep);
+            color: white;
+        }
+
+        .sudoku-cell:nth-child(3n) { margin-right: 2px; }
+        .sudoku-cell:nth-child(27n) { margin-bottom: 2px; } /* Grid thick lines */
+        .sudoku-cell:focus { background: #312e81; outline: none; }
+        .sudoku-cell.fixed { background: #334155; color: #94a3b8; font-weight: bold; }
+        .sudoku-cell.correct { background: #065f46; } /* Green tint */
+        .sudoku-cell.wrong { background: #7f1d1d; } /* Red tint */
+
+        .sudoku-controls {
+            margin-top: 15px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* --- FOOTER --- */
+        .controls-bar {
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            background: var(--bg-surface);
+            padding: 8px 20px;
+            border-radius: 20px;
+            border: 1px solid #334155;
+            display: none; /* Hidden by default */
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>ARCADE AI</h1>
+        <div style="color: var(--text-muted); margin-top: 5px;">Generative Game Engine</div>
+    </header>
+
+    <div class="prompt-wrapper">
+        <input type="text" id="prompt-input" placeholder="Try: 'play space shooter' or 'create sudoku'..." autocomplete="off">
+        <button id="gen-btn">Generate</button>
+    </div>
+
+    <div id="controls-bar" class="controls-bar"></div>
+
+    <div id="game-stage">
+        <div class="overlay-text" style="color: #64748b;">Games will appear here</div>
+    </div>
+
+    <script>
+        /**
+         * ENGINE CORE
+         * Handles Global Input, Loop Management, and Canvas Setup
+         */
+        const stage = document.getElementById('game-stage');
+        const controlsBar = document.getElementById('controls-bar');
+        const inputField = document.getElementById('prompt-input');
+        
+        let animationFrameId = null;
+        let gameIntervalId = null;
+        
+        // GLOBAL INPUT STATE (Prevents sticky keys & bugs)
+        const keys = {};
+
+        // Prevent default scrolling for game keys
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+                // Only prevent scroll if input field is NOT focused
+                if(document.activeElement !== inputField) e.preventDefault();
+            }
+        });
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        document.getElementById('gen-btn').addEventListener('click', processPrompt);
+        inputField.addEventListener('keypress', (e) => { if(e.key === 'Enter') processPrompt(); });
+
+        function processPrompt() {
+            const val = inputField.value.toLowerCase();
+            stopGame(); // Kill any running processes
+
+            // Unfocus input so keys work immediately
+            inputField.blur();
+
+            if(val.includes('snake')) startSnake();
+            else if(val.includes('bird') || val.includes('flappy')) startFlappyBird();
+            else if(val.includes('shoot') || val.includes('space')) startSpaceShooter();
+            else if(val.includes('pong') || val.includes('tennis')) startPong();
+            else if(val.includes('sudoku')) startSudoku();
+            else alert("I support: Snake, Flappy Bird, Space Shooter, Pong, and Sudoku.");
+        }
+
+        function stopGame() {
+            if(animationFrameId) cancelAnimationFrame(animationFrameId);
+            if(gameIntervalId) clearInterval(gameIntervalId);
+            stage.innerHTML = '';
+            controlsBar.style.display = 'none';
+        }
+
+        function initCanvas(w, h, hint) {
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            stage.appendChild(canvas);
+            
+            controlsBar.textContent = hint;
+            controlsBar.style.display = 'inline-block';
+            
+            return { canvas, ctx: canvas.getContext('2d') };
+        }
+
+        function drawGameOver(ctx, w, h, score) {
+            ctx.fillStyle = "rgba(0,0,0,0.7)";
+            ctx.fillRect(0,0,w,h);
+            ctx.fillStyle = "white";
+            ctx.textAlign = "center";
+            ctx.font = "bold 30px sans-serif";
+            ctx.fillText("GAME OVER", w/2, h/2 - 20);
+            ctx.font = "20px sans-serif";
+            ctx.fillText("Score: " + score, w/2, h/2 + 20);
+            ctx.font = "14px sans-serif";
+            ctx.fillStyle = "#94a3b8";
+            ctx.fillText("Press Space/Click to Restart", w/2, h/2 + 50);
+        }
+
+        /**
+         * 1. SPACE SHOOTER (Refined)
+         * Fixes: Bullet tunneling, array skipping, cooldowns
+         */
+        function startSpaceShooter() {
+            const { canvas, ctx } = initCanvas(400, 500, "ARROWS to Move | SPACE to Shoot");
+            
+            let ship = { x: 185, y: 450, w: 30, h: 30 };
+            let bullets = [];
+            let enemies = [];
+            let frame = 0;
+            let score = 0;
+            let active = true;
+            let lastShot = 0;
+
+            function update() {
+                if(!active) {
+                    drawGameOver(ctx, canvas.width, canvas.height, score);
+                    if(keys['Space'] && frame > lastShot + 30) startSpaceShooter(); // Restart
+                    else { animationFrameId = requestAnimationFrame(update); return; }
+                }
+
+                ctx.fillStyle = "#020617";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Ship Logic
+                if(keys['ArrowLeft'] && ship.x > 0) ship.x -= 6;
+                if(keys['ArrowRight'] && ship.x < 370) ship.x += 6;
+                if(keys['Space'] && frame - lastShot > 15) {
+                    bullets.push({ x: ship.x + 12, y: ship.y });
+                    lastShot = frame;
+                }
+
+                // Enemy Spawning
+                if(frame % 50 === 0) {
+                    enemies.push({ x: Math.random() * 370, y: -30, w: 30, h: 30 });
+                }
+
+                // Update Bullets (Reverse Loop for safe splicing)
+                ctx.fillStyle = "#facc15";
+                for(let i = bullets.length - 1; i >= 0; i--) {
+                    bullets[i].y -= 8;
+                    ctx.fillRect(bullets[i].x, bullets[i].y, 6, 15);
+                    if(bullets[i].y < -20) bullets.splice(i, 1);
+                }
+
+                // Update Enemies
+                for(let i = enemies.length - 1; i >= 0; i--) {
+                    let e = enemies[i];
+                    e.y += 3;
+                    
+                    // Collision: Ship
+                    if(rectIntersect({x:e.x, y:e.y, w:e.w, h:e.h}, ship)) active = false;
+
+                    // Collision: Bullets
+                    let hit = false;
+                    for(let j = bullets.length - 1; j >= 0; j--) {
+                        if(rectIntersect({x:bullets[j].x, y:bullets[j].y, w:6, h:15}, {x:e.x, y:e.y, w:e.w, h:e.h})) {
+                            bullets.splice(j, 1);
+                            hit = true;
+                            score += 10;
+                            break;
+                        }
+                    }
+                    
+                    if(hit) {
+                        enemies.splice(i, 1);
+                    } else {
+                        // Draw Enemy
+                        ctx.fillStyle = "#ef4444";
+                        ctx.fillRect(e.x, e.y, e.w, e.h);
+                        if(e.y > canvas.height) enemies.splice(i, 1);
+                    }
+                }
+
+                // Draw Ship
+                ctx.fillStyle = "#3b82f6";
+                ctx.beginPath();
+                ctx.moveTo(ship.x + 15, ship.y);
+                ctx.lineTo(ship.x, ship.y + 30);
+                ctx.lineTo(ship.x + 30, ship.y + 30);
+                ctx.fill();
+
+                // UI
+                ctx.fillStyle = "white";
+                ctx.font = "16px sans-serif";
+                ctx.fillText("Score: " + score, 10, 25);
+
+                frame++;
+                animationFrameId = requestAnimationFrame(update);
+            }
+            update();
+        }
+
+        /**
+         * 2. SNAKE (Refined)
+         * Fixes: Input queueing (prevents self-collision on fast turns)
+         */
+        function startSnake() {
+            const { canvas, ctx } = initCanvas(400, 400, "ARROWS to Move");
+            const gridSize = 20;
+            const tileCount = 20;
+            
+            let snake = [{x:10, y:10}];
+            let food = {x:15, y:15};
+            let xv = 0, yv = 0;
+            let score = 0;
+            
+            // Input buffer to fix the "fast turn suicide" bug
+            let nextXv = 0, nextYv = 0; 
+            let started = false;
+
+            function gameStep() {
+                // Apply buffered Input
+                xv = nextXv;
+                yv = nextYv;
+
+                let px = snake[0].x + xv;
+                let py = snake[0].y + yv;
+
+                // Wall Wrap
+                if(px < 0) px = tileCount - 1;
+                if(px >= tileCount) px = 0;
+                if(py < 0) py = tileCount - 1;
+                if(py >= tileCount) py = 0;
+
+                // Self Collision
+                let collision = false;
+                for(let i=0; i<snake.length; i++) {
+                    if(snake[i].x === px && snake[i].y === py) collision = true;
+                }
+
+                if(collision && started) {
+                    // Reset
+                    snake = [{x:10, y:10}];
+                    xv = nextXv = 0; yv = nextYv = 0;
+                    score = 0;
+                    started = false;
+                }
+
+                if(started) {
+                    snake.unshift({x:px, y:py});
+                    if(px === food.x && py === food.y) {
+                        score++;
+                        food = {
+                            x: Math.floor(Math.random() * tileCount),
+                            y: Math.floor(Math.random() * tileCount)
+                        };
+                    } else {
+                        snake.pop();
+                    }
+                }
+
+                // Drawing
+                ctx.fillStyle = "#0f172a";
+                ctx.fillRect(0,0,canvas.width, canvas.height);
+
+                ctx.fillStyle = "#ef4444";
+                ctx.fillRect(food.x*gridSize, food.y*gridSize, gridSize-2, gridSize-2);
+
+                ctx.fillStyle = "#22c55e";
+                for(let i=0; i<snake.length; i++) {
+                    ctx.fillRect(snake[i].x*gridSize, snake[i].y*gridSize, gridSize-2, gridSize-2);
+                }
+
+                ctx.fillStyle = "white";
+                ctx.font = "16px sans-serif";
+                ctx.fillText("Score: " + score, 10, 25);
+            }
+
+            // High frequency input polling, low frequency game update
+            gameIntervalId = setInterval(gameStep, 100); 
+
+            // Input Handler inside loop (reads global keys)
+            // We use a separate interval for checking keys to ensure responsiveness
+            function inputCheck() {
+                if(keys['ArrowLeft'] && xv !== 1) { nextXv = -1; nextYv = 0; started=true; }
+                if(keys['ArrowUp'] && yv !== 1) { nextXv = 0; nextYv = -1; started=true; }
+                if(keys['ArrowRight'] && xv !== -1) { nextXv = 1; nextYv = 0; started=true; }
+                if(keys['ArrowDown'] && yv !== -1) { nextXv = 0; nextYv = 1; started=true; }
+                animationFrameId = requestAnimationFrame(inputCheck);
+            }
+            inputCheck();
+        }
+
+        /**
+         * 3. FLAPPY BIRD (Refined)
+         * Fixes: Better gravity, distinct hitboxes
+         */
+        function startFlappyBird() {
+            const { canvas, ctx } = initCanvas(320, 480, "SPACE or CLICK to Jump");
+            
+            let bird = { x: 50, y: 150, v: 0, r: 12 };
+            let pipes = [];
+            let frame = 0, score = 0, active = true;
+            let lastJump = 0;
+
+            function jump() {
+                if(!active) {
+                    // Reset
+                    bird.y = 150; bird.v = 0; pipes = []; score = 0; active = true; frame = 0;
+                } else {
+                    bird.v = -7;
+                }
+            }
+            
+            canvas.addEventListener('mousedown', jump);
+
+            function update() {
+                ctx.fillStyle = "#0ea5e9"; // Sky blue
+                ctx.fillRect(0,0,canvas.width, canvas.height);
+
+                // Input (with debounce for space)
+                if(keys['Space'] && frame - lastJump > 10) { jump(); lastJump = frame; }
+
+                if(active) {
+                    bird.v += 0.4; // Gravity
+                    bird.y += bird.v;
+
+                    if(frame % 110 === 0) {
+                        let gap = 120;
+                        let topH = Math.random() * (canvas.height - gap - 100) + 50;
+                        pipes.push({x: canvas.width, top: topH, gap: gap});
+                    }
+
+                    // Collision
+                    if(bird.y + bird.r > canvas.height || bird.y - bird.r < 0) active = false;
+
+                    for(let i = pipes.length-1; i>=0; i--) {
+                        let p = pipes[i];
+                        p.x -= 2;
+
+                        // Pipe Logic
+                        if(bird.x + bird.r > p.x && bird.x - bird.r < p.x + 50) {
+                            if(bird.y - bird.r < p.top || bird.y + bird.r > p.top + p.gap) active = false;
+                        }
+
+                        if(p.x === 40) score++; // Passed pipe
+                        if(p.x < -60) pipes.splice(i, 1);
+
+                        // Draw Pipe
+                        ctx.fillStyle = "#22c55e";
+                        ctx.fillRect(p.x, 0, 50, p.top);
+                        ctx.fillRect(p.x, p.top + p.gap, 50, canvas.height - (p.top+p.gap));
+                    }
+                }
+
+                // Draw Bird
+                ctx.fillStyle = "#facc15";
+                ctx.beginPath();
+                ctx.arc(bird.x, bird.y, bird.r, 0, Math.PI*2);
+                ctx.fill();
+
+                ctx.fillStyle = "white";
+                ctx.font = "bold 20px sans-serif";
+                ctx.fillText(score, canvas.width/2, 50);
+
+                if(!active) drawGameOver(ctx, canvas.width, canvas.height, score);
+
+                frame++;
+                animationFrameId = requestAnimationFrame(update);
+            }
+            update();
+        }
+
+        /**
+         * 4. PING PONG (Refined)
+         * Fixes: AI Smoothing, Ball Reset Logic
+         */
+        function startPong() {
+            const { canvas, ctx } = initCanvas(500, 300, "MOUSE controls Left Paddle");
+            
+            let ball = { x: 250, y: 150, dx: 4, dy: 4, r: 6 };
+            let p1Y = 100, aiY = 100;
+            const pH = 60; // Paddle Height
+
+            // Mouse tracking
+            canvas.onmousemove = (e) => {
+                let rect = canvas.getBoundingClientRect();
+                p1Y = e.clientY - rect.top - pH/2;
+            };
+
+            function update() {
+                ctx.fillStyle = "black";
+                ctx.fillRect(0,0,canvas.width, canvas.height);
+                
+                // Net
+                ctx.fillStyle = "#333";
+                ctx.fillRect(canvas.width/2 - 1, 0, 2, canvas.height);
+
+                // Ball Physics
+                ball.x += ball.dx;
+                ball.y += ball.dy;
+
+                // Top/Bottom bounce
+                if(ball.y < 0 || ball.y > canvas.height) ball.dy *= -1;
+
+                // Paddle Collision
+                // Player (Left)
+                if(ball.x - ball.r < 20 && ball.y > p1Y && ball.y < p1Y + pH) {
+                    ball.dx = Math.abs(ball.dx) + 0.5; // Speed up
+                    ball.x = 20 + ball.r; // Push out to prevent sticking
+                }
+                // AI (Right)
+                if(ball.x + ball.r > canvas.width - 20 && ball.y > aiY && ball.y < aiY + pH) {
+                    ball.dx = -(Math.abs(ball.dx) + 0.5);
+                    ball.x = canvas.width - 20 - ball.r;
+                }
+
+                // Score/Reset
+                if(ball.x < 0 || ball.x > canvas.width) {
+                    ball.x = 250; ball.y = 150;
+                    ball.dx = (ball.dx > 0 ? -4 : 4);
+                    ball.dy = 4;
+                }
+
+                // AI Logic (Simple tracking with delay)
+                let targetY = ball.y - pH/2;
+                aiY += (targetY - aiY) * 0.1;
+
+                // Draw
+                ctx.fillStyle = "white";
+                ctx.fillRect(10, p1Y, 10, pH);
+                ctx.fillRect(canvas.width - 20, aiY, 10, pH);
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+                ctx.fill();
+
+                animationFrameId = requestAnimationFrame(update);
+            }
+            update();
+        }
+
+        /**
+         * 5. SUDOKU (Refined)
+         * Fixes: Validation Logic, UI
+         */
+        function startSudoku() {
+            controlsBar.textContent = "Click cells to type numbers (1-9). Press 'Check' to validate.";
+            controlsBar.style.display = 'block';
+
+            const container = document.createElement('div');
+            container.id = 'sudoku-container';
+            stage.appendChild(container);
+
+            const grid = document.createElement('div');
+            grid.className = 'sudoku-grid';
+            container.appendChild(grid);
+
+            // Valid Solution
+            const solution = "534678912672195348198342567859761423426853791713924856961537284287419635345286179";
+            // Masked Puzzle (0 = empty)
+            const puzzle   = "530070000600195000098000060800060003400803001700020006060000280000419005000080079";
+
+            let inputs = [];
+
+            for(let i=0; i<81; i++) {
+                let cell = document.createElement('input');
+                cell.type = 'text';
+                cell.className = 'sudoku-cell';
+                cell.maxLength = 1;
+                
+                if(puzzle[i] !== '0') {
+                    cell.value = puzzle[i];
+                    cell.readOnly = true;
+                    cell.classList.add('fixed');
+                }
+                
+                // Allow only 1-9
+                cell.addEventListener('input', (e) => {
+                    const v = e.target.value;
+                    if(!/^[1-9]$/.test(v)) e.target.value = '';
+                    // Remove validation colors on edit
+                    e.target.classList.remove('correct', 'wrong');
+                });
+
+                grid.appendChild(cell);
+                inputs.push(cell);
+            }
+
+            const btnDiv = document.createElement('div');
+            btnDiv.className = 'sudoku-controls';
+            
+            const checkBtn = document.createElement('button');
+            checkBtn.id = 'gen-btn'; // reuse style
+            checkBtn.innerText = "Check Solution";
+            checkBtn.onclick = () => {
+                let complete = true;
+                inputs.forEach((inp, idx) => {
+                    if(!inp.classList.contains('fixed')) {
+                        if(inp.value === solution[idx]) {
+                            inp.classList.add('correct');
+                            inp.classList.remove('wrong');
+                        } else {
+                            inp.classList.add('wrong');
+                            inp.classList.remove('correct');
+                            complete = false;
+                        }
+                    }
+                });
+                if(complete) alert("Puzzle Solved! Great Job!");
+            };
+
+            btnDiv.appendChild(checkBtn);
+            container.appendChild(btnDiv);
+        }
+
+        // Helper: Rectangle Collision
+        function rectIntersect(r1, r2) {
+            return !(r2.x > r1.x + r1.w || 
+                     r2.x + r2.w < r1.x || 
+                     r2.y > r1.y + r1.h || 
+                     r2.y + r2.h < r1.y);
+        }
+
+    </script>
+</body>
+</html>
